@@ -1,73 +1,115 @@
-const { Client, Intents } = require('discord.js');
+const { Client, Intents, MessageEmbed } = require('discord.js');
 const dotenv = require('dotenv');
-// const fetch = require('node-fetch');
-const { setHeader, GraphQLClient } = require('graphql-request');
+const { GraphQLClient, gql } = require('graphql-request');
+const { addDays, differenceInDays, format } = require('date-fns');
 
-const client = new Client({ intents: [Intents.FLAGS.GUILDS, Intents.FLAGS.GUILD_MESSAGES] });
+const client = new Client({
+  intents: [Intents.FLAGS.GUILDS, Intents.FLAGS.GUILD_MESSAGES],
+});
 
 dotenv.config();
-
-// When the client is ready, run this code (only once)
-client.once('ready', () => {
-	console.log('Ready!');
+client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}!`);
 
-  // client.channels.fetch('879298364263505931')
-  //   .then(channel => channel.send('HERE'));
+  const guild = client.guilds.cache.get(process.env.GUILD_ID);
+  const channel = guild.channels.cache.get(process.env.CHANNEL_ID);
+
+  await fetchGitlab(channel);
 });
 
-client.on('messageCreate', message => {
-  if (message.content === 'ping') {
-    message.channel.send('pong');
-  }
-});
+const isPastThreshold = (mergeRequest) => {
+  const threshold = process.env.THRESHOLD_DAYS;
 
-const fetchGitlab = async () => {
-  const query = `
-      query {
-          projects(membership: true) {
-              nodes {
-                  description
-                  fullPath
-                  id
-                  mergeRequests(state: opened) {
-                      nodes {
-                          id
-                          createdAt
-                          discussions {
-                              nodes {
-                                  id
-                                  createdAt
-                                  notes {
-                                      nodes {
-                                          id
-                                          body
-                                      }
-                                  }
-                              }
-                          }
-                      }
-                  }
-              }
-          }
+  return (
+    differenceInDays(new Date(), new Date(mergeRequest.updatedAt)) > threshold
+  );
+};
+
+const processInformation = (channel, data) => {
+  const projects = data.projects.nodes;
+
+  const mergeRequestsPastThreshold = projects
+    .map((project) => {
+      return project.mergeRequests.nodes
+        .filter((mergeRequest) => mergeRequest.draft === false)
+        .flatMap((mergeRequest) => {
+          return isPastThreshold(mergeRequest) ? mergeRequest : [];
+        })
+        .filter(Boolean);
+    })
+    .flat();
+
+  mergeRequestsPastThreshold.forEach((mergeRequest) =>
+    sendEmbed(channel, mergeRequest)
+  );
+};
+
+const sendEmbed = async (channel, mergeRequest) => {
+  const embed = new MessageEmbed()
+    .setColor('#0099ff')
+    .setTitle(mergeRequest.title)
+    .setURL(mergeRequest.webUrl)
+    .setDescription(mergeRequest.description)
+    .setThumbnail(`https://gitlab.com/${mergeRequest.author.avatarUrl}`)
+    .addFields(
+      { name: 'Author: ', value: mergeRequest.author.name },
+      {
+        name: 'Last update: ',
+        value: format(new Date(mergeRequest.updatedAt), 'dd/LL/yyyy'),
       }
+    );
+
+  channel.send({ embeds: [embed] });
+};
+
+const fetchGitlab = async (channel) => {
+  const projectIds = process.env.PROJECT_IDS.split(',').map(
+    (id) => `gid://gitlab.com/Project/${id}`
+  );
+
+  const query = gql`
+    query ($ids: [ID!]) {
+      projects(membership: true, ids: $ids) {
+        nodes {
+          description
+          fullPath
+          id
+          mergeRequests(state: opened) {
+            nodes {
+              id
+              createdAt
+              updatedAt
+              webUrl
+              title
+              draft
+              description
+              author {
+                name
+                avatarUrl
+              }
+            }
+          }
+        }
+      }
+    }
   `;
 
+  const variables = {
+    ids: projectIds,
+  };
+
   const gitlabClient = new GraphQLClient('https://gitlab.com/api/graphql');
-  gitlabClient.setHeader('authorization', `Bearer ${process.env.GITLAB_ACCESS_TOKEN}`);
+  gitlabClient.setHeader(
+    'authorization',
+    `Bearer ${process.env.GITLAB_ACCESS_TOKEN}`
+  );
 
-  const data = await gitlabClient.request(query);
+  const data = await gitlabClient.request(query, variables);
 
-  const projects = data.projects.nodes;
-  const mergeRequests = projects.map(project => project.mergeRequests.nodes).filter();
-  const discussions = mergeRequests.map(mergeRequest => mergeRequest);
+  processInformation(channel, data);
+};
 
-  console.log(discussions);
-}
-
-fetchGitlab();
-
-client.on('error', err => {
+client.on('error', (err) => {
   console.warn(err);
 });
 

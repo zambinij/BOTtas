@@ -10,10 +10,15 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "date-fns": "^2.23.0",
     "discord.js": "^13.1.0",
     "dotenv": "^10.0.0",
-    "graphql-request": "^3.5.0",
-    "node-fetch": "^2.6.1",
-    "nodemon": "^2.0.12"
+    "graphql-request": "^3.5.0"
+  },
+  "devDependencies": {
+    "eslint": "^7.32.0",
+    "eslint-config-prettier": "^8.3.0",
+    "eslint-plugin-prettier": "^3.4.1",
+    "prettier": "^2.3.2"
   }
 }
